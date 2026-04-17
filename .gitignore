@@ -4,3 +4,7 @@ ui_Configuration.h
 ui_LogWindow.h
 osmose
 Makefile
+build/
+dist/
+.codex
+compile_commands.json

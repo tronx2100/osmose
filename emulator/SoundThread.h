@@ -33,6 +33,7 @@
 
 #include <iostream>
 #include <sstream>
+#include <string>
 #include <sys/time.h>
 #include <alsa/asoundlib.h>
 
@@ -59,6 +60,7 @@ public:
     void stop();
     void pause();
     void resume();
+    const char *getOpenedDeviceName() const;
 
     ~SoundThread();
 
@@ -74,10 +76,13 @@ private:
     snd_pcm_hw_params_t *hw_params;
     snd_pcm_sw_params_t *sw_params;
     snd_pcm_sframes_t frames_to_deliver;
+    bool interleavedAccess;
+    string openedDeviceName;
 
     void initAlsa();
     void play();
     int playback_callback (snd_pcm_sframes_t nframes);
+    int writeFrames(const short *buffer, snd_pcm_sframes_t nframes);
     SoundThreadState state;
     pthread_mutex_t mutex;
     FIFOSoundBuffer *sndFIFO;

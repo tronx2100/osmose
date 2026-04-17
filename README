@@ -34,7 +34,7 @@ GUI lib powerful enough to refresh display at 60 Hz. So SDL is no longer used no
 Dependencies:
 -------------
 - Qt 5.x or >= 4.6
-- Alsa
+- ALSA (works on modern PipeWire/PulseAudio setups via ALSA compatibility plugins)
 
 Development headers for these libraries are needed to compile from the source.
 
@@ -55,9 +55,23 @@ To build osmose, do from the source directory:
     qmake
     make
 
+Or use the helper script:
+    ./compile.sh
+
+An alias script named `compile` is also provided:
+    ./compile
+
 To build with the system's minizip library instead of the bundled unzip code,
 configure the build with:
     qmake CONFIG+=system-minizip
+
+Debian package:
+---------------
+
+To create a `.deb` package on Debian/Ubuntu:
+    ./build.sh
+
+The package is written to `dist/`.
 
 
 Vertical synchronisation:
@@ -82,6 +96,11 @@ Sound:
 Osmose uses ALSA for the sound system. It has been reported that concurrent
 application using the sound channel can inhibit osmose sound rendering. So,
 avoid watching videos while playing with Osmose!
+
+On modern Debian systems using PipeWire, Osmose now tries several ALSA devices
+automatically (`default`, `pipewire`, `pulse`, `plughw:0,0`).
+You can force one manually with:
+    OSMOSE_AUDIO_DEVICE=<device> ./build/osmose
 
 
 Features:

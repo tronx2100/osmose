@@ -111,9 +111,10 @@ OsmoseCore::OsmoseCore(const char *rom_f,  unsigned int *output, OsmoseConfigura
     {
         try
         {
-            sndThread = new SoundThread("plughw:0,0", p->getFIFOSoundBuffer());
+            sndThread = new SoundThread("auto", p->getFIFOSoundBuffer());
             sndThread->start();  // Start thread, not playing!
-            string msg = "Creating SoundThread";
+            string msg = "Creating SoundThread on ALSA device: ";
+            msg += sndThread->getOpenedDeviceName();
             QLogWindow::getInstance()->appendLog(msg);
         }
         catch(string error)

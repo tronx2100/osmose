@@ -30,13 +30,25 @@
 
 #include "SoundThread.h"
 
+#include <cerrno>
+#include <cstdlib>
+#include <cstring>
+#include <vector>
+
 /**
  * Constructor.
  */
 SoundThread::SoundThread(const char *devName, FIFOSoundBuffer *sb)
 {
+    playback_handle = NULL;
+    hw_params = NULL;
+    sw_params = NULL;
+    frames_to_deliver = 0;
+    interleavedAccess = false;
+
     // Make a deep copy of the device name
     strncpy(deviceName, devName, DEVICE_NAME_LENGTH);
+    deviceName[DEVICE_NAME_LENGTH - 1] = '\0';
     initAlsa();
     state = Paused;
     mutex = PTHREAD_MUTEX_INITIALIZER;
@@ -54,7 +66,10 @@ SoundThread::~SoundThread()
     this->join(NULL);
 
     // THEN, close the audio device.
-    snd_pcm_close (playback_handle);
+    if (playback_handle != NULL)
+    {
+        snd_pcm_close(playback_handle);
+    }
 }
 
 /**
@@ -111,26 +126,32 @@ void SoundThread::play()
 
     if ((err = snd_pcm_wait(playback_handle, 16)) < 0)
     {
-        fprintf(stderr, "poll failed (%s)\n", strerror (errno));
+        err = snd_pcm_recover(playback_handle, err, 1);
+        if (err < 0)
+        {
+            fprintf(stderr, "poll failed (%s)\n", strerror(errno));
+            return;
+        }
     }
 
     // find out how much space is available for playback data
 
     if ((frames_to_deliver = snd_pcm_avail_update (playback_handle)) < 0)
     {
-        if (frames_to_deliver == -EPIPE)
-        {
-            fprintf (stderr, "an xrun occurred\n");
-        }
-
-        else
+        err = snd_pcm_recover(playback_handle, (int)frames_to_deliver, 1);
+        if (err < 0)
         {
             fprintf (stderr, "unknown ALSA avail update return value (%d)\n",
                      (int)frames_to_deliver);
         }
+        return;
     }
 
     frames_to_deliver = frames_to_deliver > 4096 ? 4096 : frames_to_deliver;
+    if (frames_to_deliver <= 0)
+    {
+        return;
+    }
 
     // deliver the data
 
@@ -143,19 +164,57 @@ void SoundThread::play()
 
 int SoundThread::playback_callback (snd_pcm_sframes_t nframes)
 {
-    int err;
-
     //printf ("playback callback called with %d frames\n", (int)nframes);
-    void *channelsbuffer[1];
-    channelsbuffer[0] = &samplebuffer;
     sndFIFO->read(samplebuffer, nframes);
 
-    if ((err = snd_pcm_writen(playback_handle, (void **)channelsbuffer, nframes)) < 0)
+    return writeFrames(samplebuffer, nframes);
+}
+
+int SoundThread::writeFrames(const short *buffer, snd_pcm_sframes_t nframes)
+{
+    snd_pcm_sframes_t written = 0;
+
+    while (written < nframes)
     {
-        fprintf (stderr, "write failed (%s)\n", snd_strerror (err));
+        snd_pcm_sframes_t err;
+        snd_pcm_sframes_t remaining = nframes - written;
+
+        if (interleavedAccess)
+        {
+            err = snd_pcm_writei(playback_handle, buffer + written, remaining);
+        }
+        else
+        {
+            void *channelsbuffer[1];
+            channelsbuffer[0] = (void *)(buffer + written);
+            err = snd_pcm_writen(playback_handle, (void **)channelsbuffer, remaining);
+        }
+
+        if (err == -EAGAIN)
+        {
+            continue;
+        }
+
+        if (err < 0)
+        {
+            err = snd_pcm_recover(playback_handle, (int)err, 1);
+            if (err < 0)
+            {
+                fprintf(stderr, "write failed (%s)\n", snd_strerror((int)err));
+                return (int)err;
+            }
+            continue;
+        }
+
+        if (err == 0)
+        {
+            break;
+        }
+
+        written += err;
     }
 
-    return err;
+    return (int)written;
 }
 
 
@@ -201,13 +260,58 @@ void SoundThread::resume()
 void SoundThread::initAlsa()
 {
     int err;
+    int openErr = 0;
     ostringstream oss;
+    vector<string> candidates;
+    const char *envDevice = getenv("OSMOSE_AUDIO_DEVICE");
+
+    auto addCandidate = [&candidates](const char *name)
+    {
+        if ((name == NULL) || (name[0] == '\0'))
+        {
+            return;
+        }
+
+        for (size_t i = 0; i < candidates.size(); i++)
+        {
+            if (candidates[i] == name)
+            {
+                return;
+            }
+        }
+        candidates.push_back(name);
+    };
+
+    addCandidate(envDevice);
+    if ((strcmp(deviceName, "auto") != 0) && (strcmp(deviceName, "AUTO") != 0))
+    {
+        addCandidate(deviceName);
+    }
+    addCandidate("default");
+    addCandidate("pipewire");
+    addCandidate("pulse");
+    addCandidate("plughw:0,0");
 
     // Get a handle on the PCM device.
-
-    if ((err = snd_pcm_open (&playback_handle, deviceName, SND_PCM_STREAM_PLAYBACK, 0)) < 0)
+    for (size_t i = 0; i < candidates.size(); i++)
     {
-        oss << "cannot open audio device: " << deviceName << snd_strerror(err) << endl;
+        err = snd_pcm_open(&playback_handle, candidates[i].c_str(), SND_PCM_STREAM_PLAYBACK, 0);
+        if (err >= 0)
+        {
+            openedDeviceName = candidates[i];
+            break;
+        }
+        openErr = err;
+    }
+
+    if (playback_handle == NULL)
+    {
+        oss << "cannot open audio device";
+        if (envDevice != NULL && envDevice[0] != '\0')
+        {
+            oss << " (OSMOSE_AUDIO_DEVICE=" << envDevice << ")";
+        }
+        oss << ": " << snd_strerror(openErr) << endl;
         throw oss.str();
     }
 
@@ -226,11 +330,21 @@ void SoundThread::initAlsa()
     }
 
 
-    // Set Sample are NON Interleaved (mono!)
-    if ((err = snd_pcm_hw_params_set_access (playback_handle, hw_params, SND_PCM_ACCESS_RW_NONINTERLEAVED)) < 0)
+    // Prefer non interleaved mode, but allow interleaved for modern ALSA backends.
+    err = snd_pcm_hw_params_set_access(playback_handle, hw_params, SND_PCM_ACCESS_RW_NONINTERLEAVED);
+    if (err < 0)
     {
-        oss << "cannot set access type: " << snd_strerror (err) << endl;
-        throw oss.str();
+        err = snd_pcm_hw_params_set_access(playback_handle, hw_params, SND_PCM_ACCESS_RW_INTERLEAVED);
+        if (err < 0)
+        {
+            oss << "cannot set access type: " << snd_strerror(err) << endl;
+            throw oss.str();
+        }
+        interleavedAccess = true;
+    }
+    else
+    {
+        interleavedAccess = false;
     }
 
     // Set Sample format: Signed 16bit little endian.
@@ -327,4 +441,9 @@ void SoundThread::initAlsa()
         oss << "cannot prepare audio interface for use: " << snd_strerror (err) << endl;
         throw oss.str();
     }
+}
+
+const char *SoundThread::getOpenedDeviceName() const
+{
+    return openedDeviceName.c_str();
 }
