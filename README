@@ -97,10 +97,13 @@ Osmose uses ALSA for the sound system. It has been reported that concurrent
 application using the sound channel can inhibit osmose sound rendering. So,
 avoid watching videos while playing with Osmose!
 
-On modern Debian systems using PipeWire, Osmose now tries several ALSA devices
-automatically (`default`, `pipewire`, `pulse`, `plughw:0,0`).
+On modern Debian systems using PipeWire (including Debian 2026), Osmose now tries 
+several ALSA devices automatically (`default`, `pipewire`, `pulse`, `plughw:0,0`).
 You can force one manually with:
     OSMOSE_AUDIO_DEVICE=<device> ./build/osmose
+
+This version includes full audio support on Debian 2026 and other modern distributions
+with PipeWire-based audio systems.
 
 
 Features:
