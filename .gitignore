@@ -6,5 +6,4 @@ osmose
 Makefile
 build/
 dist/
-.codex
 compile_commands.json
